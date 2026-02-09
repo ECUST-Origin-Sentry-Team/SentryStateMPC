@@ -12,7 +12,7 @@ MPC（模型预测控制）的核心思想其实非常简单，就像我们在�
 
 ### (1) $x_k$：状态向量 (State Vector) —— “你的属性面板”
 代表在第 $k$ 秒（当前时刻），机器人的**身体状况**。
-$
+```math
 x_k = \begin{bmatrix}
 P_k \\ H_k \\ Q_k \\ T^{stay}_k \\ T^{cd}_k
 \end{bmatrix}
@@ -23,7 +23,7 @@ P_k \\ H_k \\ Q_k \\ T^{stay}_k \\ T^{cd}_k
 & \leftarrow \text{姿态已维持时间 (用于判断衰减)} \\
 & \leftarrow \text{切换冷却时间 (CD)}
 \end{aligned}
-$
+```
 
 ### (2) $u_k$：控制输入 (Control Input) —— “你的手柄按键”
 代表你在第 $k$ 秒决定**做什么动作**。
@@ -32,7 +32,7 @@ $
 
 ### (3) $d_k$：外部扰动 (Disturbance) —— “敌人的行动”
 这是**最关键**的部分。因为敌人怎么动我们控制不了，只能预测，所以叫“扰动”。
-$
+```math
 d_k = \begin{bmatrix}
 D_{in}(k) \\ Q_{req}(k) \\ M_{req}(k)
 \end{bmatrix}
@@ -41,7 +41,7 @@ D_{in}(k) \\ Q_{req}(k) \\ M_{req}(k)
 & \leftarrow \text{预测你需要开火的热量 (Fire Demand)} \\
 & \leftarrow \text{预测你需要跑多快 (Mobility Demand)}
 \end{aligned}
-$
+```
 
 #### **这三个扰动值是怎么预测出来的？**
 我们通过一个简单的**内部预测器 (Internal Predictor)**，根据视觉和导航系统提供的**瞬时观测值 (Observation)** 转换而来：
@@ -72,7 +72,9 @@ $
 这是 MPC 的灵魂。它回答了一个问题：**“如果我现在是状态 $x_k$，环境是 $d_k$，我做了动作 $u_k$，那么下一刻 $x_{k+1}$ 会变成什么样？”**
 
 数学表达为：
-$ x_{k+1} = f(x_k, u_k, d_k) $
+```math
+ x_{k+1} = f(x_k, u_k, d_k) 
+```
 
 我们把它拆解成具体的物理过程：
 
@@ -89,7 +91,9 @@ $ x_{k+1} = f(x_k, u_k, d_k) $
 
 ### (2) 血量预测方程 ($H_{k+1}$)
 下一刻血量 = 当前血量 - ( 受到伤害 $\times$ **防御系数** )
-$ H_{k+1} = H_k - D_{in}(k) \cdot \beta(P_{k+1}, T^{stay}_{k+1}) \cdot \Delta t $
+```math 
+H_{k+1} = H_k - D_{in}(k) \cdot \beta(P_{k+1}, T^{stay}_{k+1}) \cdot \Delta t 
+```
 
 这里的 $\beta$ 是**防御系数**，它是一个动态变化的数值：
 *   **防御姿态**：$\beta = 0.5$ （只受 50% 伤害）。
@@ -98,7 +102,9 @@ $ H_{k+1} = H_k - D_{in}(k) \cdot \beta(P_{k+1}, T^{stay}_{k+1}) \cdot \Delta t 
 
 ### (3) 热量预测方程 ($Q_{k+1}$)
 下一刻热量 = 当前热量 + 开火增加 - **自然冷却**
-$ Q_{k+1} = Q_k + Q_{req}(k) \cdot \Delta t - \text{BaseCool} \cdot \alpha(P_{k+1}, T^{stay}_{k+1}) \cdot \Delta t $
+```math
+ Q_{k+1} = Q_k + Q_{req}(k) \cdot \Delta t - \text{BaseCool} \cdot \alpha(P_{k+1}, T^{stay}_{k+1}) \cdot \Delta t 
+```
 
 这里的 $\alpha$ 是**冷却倍率**：
 *   **进攻姿态**：$\alpha = 3.0$ （3 倍冷却）。
@@ -112,27 +118,37 @@ $ Q_{k+1} = Q_k + Q_{req}(k) \cdot \Delta t - \text{BaseCool} \cdot \alpha(P_{k+
 有了上面的预测公式，MPC 就会在脑子里把**所有可能的动作**都模拟一遍，并计算出每个动作的总代价 $J$。代价越小越好。
 
 **代价函数 $J$ 的具体形式**：
-$ J = \sum_{k=0}^{N} \left( J_{\text{survival}} + J_{\text{missed}} + J_{\text{mobility}} + J_{\text{degrade}} \right) $
+```math
+ J = \sum_{k=0}^{N} \left( J_{\text{survival}} + J_{\text{missed}} + J_{\text{mobility}} + J_{\text{degrade}} \right) 
+```
 
 这四项具体是怎么算的？**它们通过状态转移方程预测出的 $x_{k+1}$ 来计算**：
 
 ### (1) 生存代价 ($J_{\text{survival}}$) —— “别死！”
-$ J_{\text{survival}} = w_{hp} \cdot (H_k - H_{k+1}) \cdot \left( 1 + \frac{H_{max}}{H_k} \right) $
+```math
+ J_{\text{survival}} = w_{hp} \cdot (H_k - H_{k+1}) \cdot \left( 1 + \frac{H_{max}}{H_k} \right) 
+```
 *   **联系**：利用状态转移方程算出的 $H_{k+1}$ (下一刻血量)。
 *   **含义**：掉血越多，代价越大。而且 **$H_k$ (当前血量) 越低，代价呈指数级暴增**。这迫使 MPC 在残血时极度厌恶任何伤害，哪怕一点点。
 
 ### (2) 错失开火代价 ($J_{\text{missed}}$) —— “别哑火！”
-$ J_{\text{missed}} = w_{fire} \cdot \max(0, \quad Q_{req}(k) \cdot \Delta t - \text{ActualFire}) $
+```math 
+J_{\text{missed}} = w_{fire} \cdot \max(0, \quad Q_{req}(k) \cdot \Delta t - \text{ActualFire}) 
+```
 *   **联系**：利用状态转移方程算出的 $Q_{k+1}$ 过程中的实际开火量。
 *   **含义**：如果我想打 100 热量的子弹 ($Q_{req}$)，但因为热量满了只打出了 20 ($\text{ActualFire}$)，那么我就亏了 80 的输出。这迫使 MPC 在热量高时切进攻姿态（提高冷却上限）。
 
 ### (3) 机动性风险代价 ($J_{\text{mobility}}$) —— “别跑不动！”
-$ J_{\text{mobility}} = w_{mob} \cdot M_{req}(k) \cdot (1.5 - \gamma(P_{k+1})) $
+```math 
+J_{\text{mobility}} = w_{mob} \cdot M_{req}(k) \cdot (1.5 - \gamma(P_{k+1})) 
+```
 *   **联系**：利用状态转移方程中的功率系数 $\gamma$。
 *   **含义**：如果我要跑 ($M_{req}$ 高)，但当前姿态的功率系数 $\gamma$ 很低 (比如防御姿态只有 0.5)，那么代价就很大。这迫使 MPC 在长距离奔袭时切移动姿态。
 
 ### (4) 衰减惩罚 ($J_{\text{degrade}}$) —— “别超时！”
-$ J_{\text{degrade}} = \begin{cases} 500, & \text{if } T^{stay}_{k+1} > 180 \\ 0, & \text{else} \end{cases} $
+```math
+ J_{\text{degrade}} = \begin{cases} 500, & \text{if } T^{stay}_{k+1} > 180 \\ 0, & \text{else} \end{cases} 
+ ```
 *   **联系**：利用状态转移方程算出的 $T^{stay}_{k+1}$。
 *   **含义**：一旦预测到未来某时刻维持时间超过 180s，直接加一个巨大的罚分。这迫使 MPC 在超时前强制切换。
 
