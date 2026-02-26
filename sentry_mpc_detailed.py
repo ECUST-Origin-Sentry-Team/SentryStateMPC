@@ -1,7 +1,6 @@
 import numpy as np
-import copy
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
 
 # --- Constants ---
 POSTURE_ATTACK = 1
@@ -58,15 +57,45 @@ class PredictionInput:
     heat_demand: float      
     mobility_demand: float  
 
+"""
+w_survival: 生存代价权重。血量损失越多，惩罚越大；数值越高越保守、越倾向防御。
+w_missed_fire: 错失开火代价权重。想打但因为热量/冷却限制没打出的惩罚；数值越高越倾向保持输出（更偏进攻/散热姿态）。
+w_mobility_risk: 机动风险权重。机动需求高但功率倍率低时的惩罚；数值越高越倾向移动姿态。
+w_switch: 姿态切换惩罚。数值越高越不爱切换，行为更稳定但反应更慢。
+w_degrade: 姿态弱化惩罚（维持同姿态超过 180s 的罚分）。数值越高越避免长时间停留在同一姿态。
+
+"""
 class MPCConfig:
-    def __init__(self):
-        self.dt = 0.5           
-        self.horizon = 10       
-        self.w_survival = 50.0      
-        self.w_missed_fire = 20.0   
-        self.w_mobility_risk = 10.0 
-        self.w_switch = 1.0         
-        self.w_degrade = 500.0      
+    def __init__(
+        self,
+        dt: float = 0.5,
+        horizon: int = 10,
+        
+        w_survival: float = 20.0,
+        w_missed_fire: float = 50.0,
+        w_mobility_risk: float = 20.0,
+        w_switch: float = 1.0,
+        w_degrade: float = 500.0,
+        max_hp: float = MAX_HP,
+        max_heat: float = MAX_HEAT,
+        base_cooling: float = BASE_COOLING,
+        max_buffer: float = MAX_BUFFER,
+        switch_cd_limit: float = SWITCH_CD_LIMIT,
+        degrade_time_limit: float = DEGRADE_TIME_LIMIT,
+    ):
+        self.dt = dt
+        self.horizon = horizon
+        self.w_survival = w_survival
+        self.w_missed_fire = w_missed_fire
+        self.w_mobility_risk = w_mobility_risk
+        self.w_switch = w_switch
+        self.w_degrade = w_degrade
+        self.max_hp = max_hp
+        self.max_heat = max_heat
+        self.base_cooling = base_cooling
+        self.max_buffer = max_buffer
+        self.switch_cd_limit = switch_cd_limit
+        self.degrade_time_limit = degrade_time_limit
 
 class SentryMPC:
     def __init__(self, config: MPCConfig):
@@ -110,7 +139,7 @@ class SentryMPC:
         return predictions
 
     def get_dynamics_coeffs(self, posture, time_in_posture):
-        is_degraded = time_in_posture > DEGRADE_TIME_LIMIT
+        is_degraded = time_in_posture > self.config.degrade_time_limit
         
         cooling_mult = 1.0
         defense_mult = 1.0 
@@ -138,7 +167,7 @@ class SentryMPC:
         if action != state.posture and state.switch_cd <= 0:
             next_state.posture = action
             next_state.time_in_posture = 0.0
-            next_state.switch_cd = SWITCH_CD_LIMIT
+            next_state.switch_cd = self.config.switch_cd_limit
         else:
             next_state.posture = state.posture
             next_state.time_in_posture += dt
@@ -151,15 +180,19 @@ class SentryMPC:
         damage = disturbance.incoming_dps * def_mult * dt
         next_state.hp = max(0.0, state.hp - damage)
         
-        cooling = BASE_COOLING * cool_mult * dt
-        max_fire_possible = MAX_HEAT - (state.heat - cooling)
+        cooling = self.config.base_cooling * cool_mult * dt
+        max_fire_possible = self.config.max_heat - (state.heat - cooling)
         actual_fire = min(disturbance.heat_demand * dt, max_fire_possible)
         actual_fire = max(0.0, actual_fire)
         
         next_state.heat = max(0.0, state.heat + actual_fire - cooling)
         
         buffer_change = (power_mult - 1.0 - disturbance.mobility_demand) * 10.0 * dt
-        next_state.buffer_energy = np.clip(state.buffer_energy + buffer_change, 0.0, MAX_BUFFER)
+        next_state.buffer_energy = np.clip(
+            state.buffer_energy + buffer_change,
+            0.0,
+            self.config.max_buffer,
+        )
         
         return next_state, actual_fire
 
@@ -168,7 +201,7 @@ class SentryMPC:
         cost = 0.0
         
         hp_loss = state.hp - next_state.hp
-        hp_factor = 1.0 + (MAX_HP / (state.hp + 1.0)) 
+        hp_factor = 1.0 + (self.config.max_hp / (state.hp + 1.0))
         cost += hp_loss * self.config.w_survival * hp_factor
         
         desired_fire = disturbance.heat_demand * self.config.dt
@@ -181,7 +214,7 @@ class SentryMPC:
             risk = (1.5 - power_mult) * disturbance.mobility_demand
             cost += risk * self.config.w_mobility_risk
             
-        if next_state.time_in_posture > DEGRADE_TIME_LIMIT:
+        if next_state.time_in_posture > self.config.degrade_time_limit:
             cost += self.config.w_degrade
             
         return cost

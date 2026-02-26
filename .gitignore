@@ -1,1 +1,6 @@
 .trae/
+*.png
+*.csv
+*.pdf
+AGENTS.md
+*.pyc
